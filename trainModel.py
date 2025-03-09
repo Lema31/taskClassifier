@@ -1,6 +1,7 @@
 import tensorflow as tf
 import pandas as pd
 from sklearn.model_selection import train_test_split
+import json
 
 department_num = 10
 max_tokens = 8000
@@ -8,24 +9,29 @@ max_tokens = 8000
 df = pd.read_csv("datos.csv", quoting=1)
 
 X = df["Entrada"].values
-y_department = pd.get_dummies(df["Departamento"])  # One-hot para 10 departamentos
+y_department = pd.get_dummies(df["Departamento"])  
 y_priority = df["Prioridad"].values.reshape(-1, 1)
 
-# 3. División train/val (90%/10%)
+class_names = y_department.columns.tolist()
+
+
+with open("department_order.json", "w", encoding="utf-8") as f:
+    json.dump(class_names, f)
+
+
 X_train, X_val, y_dept_train, y_dept_val, y_pri_train, y_pri_val = train_test_split(
     X, 
     y_department, 
     y_priority, 
-    test_size=0.1,  # 10% para validación
-    stratify=y_department,  # Mantener distribución balanceada
+    test_size=0.1,  
+    stratify=y_department,  
     random_state=42
 )
 
-# 4. Crear datasets
 train_dataset = tf.data.Dataset.from_tensor_slices((
     {"text_input": X_train},
     {
-        "department_output": y_dept_train.astype("float32"),  # Keras requiere float32
+        "department_output": y_dept_train.astype("float32"),
         "priority_output": y_pri_train.astype("float32")
     }
 )).batch(32).prefetch(tf.data.AUTOTUNE)
@@ -38,30 +44,30 @@ val_dataset = tf.data.Dataset.from_tensor_slices((
     }
 )).batch(32)
 
-# Configuración del vectorizador
+
 vectorizer = tf.keras.layers.TextVectorization(
-    max_tokens= max_tokens,  # Reducido por el tamaño del dataset (1800 muestras)
-    output_sequence_length=64,  # 64 palabras máximo
+    max_tokens= max_tokens,  
+    output_sequence_length=64,  
     standardize="lower_and_strip_punctuation",
     split="whitespace",
     output_mode="int"
 )
 vectorizer.adapt(X_train) 
 
-# Entrada
-text_input = tf.keras.Input(shape=(1,), dtype=tf.string, name="text_input")
 
-# Capas de procesamiento
+text_input = tf.keras.Input(shape=(), dtype=tf.string, name="text_input")
+
+
 x = vectorizer(text_input)
-x = tf.keras.layers.Embedding(input_dim= max_tokens + 1, output_dim=96, name="embedding")(x)  # +1 para OOV
+x = tf.keras.layers.Embedding(input_dim= max_tokens + 1, output_dim=96, name="embedding")(x)  
 x = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(64, return_sequences=True))(x)
 x = tf.keras.layers.GlobalAveragePooling1D()(x)
 x = tf.keras.layers.Dense(64, activation="relu")(x)
-x = tf.keras.layers.Dropout(0.3)(x)  # Regularización para evitar overfitting
+x = tf.keras.layers.Dropout(0.3)(x)  
 
-# Salidas
+
 department_output = tf.keras.layers.Dense(
-    10,  # 10 departamentos
+    10,  
     activation="softmax",
     name="department_output"
 )(x)
@@ -81,14 +87,14 @@ model.compile(
         "priority_output": tf.keras.losses.MeanSquaredError()
     },
     loss_weights={
-        "department_output": 0.5,  # Ambas tareas son igual de importantes
+        "department_output": 0.5,  
         "priority_output": 0.5
     },
     metrics={
         "department_output": ["accuracy"],
         "priority_output": [
-            tf.keras.metrics.MeanAbsoluteError(),  # Error absoluto promedio
-            tf.keras.metrics.MeanSquaredError()  # Para monitorear outliers
+            tf.keras.metrics.MeanAbsoluteError(),  
+            tf.keras.metrics.MeanSquaredError()  
         ]
     }
 )
@@ -105,6 +111,8 @@ history = model.fit(
     train_dataset,
     validation_data=val_dataset,
     epochs=50,
-    batch_size=32,  # Tamaño manejable en CPU
+    batch_size=32,  
     callbacks=[early_stopping]
 )
+
+model.save("taskClassifierModel.keras")
